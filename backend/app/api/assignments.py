@@ -91,3 +91,38 @@ def list_assignments(scope_type: str, scope_id: str, db: Session = Depends(get_d
             )
         )
     return {"assignments": entries}
+
+@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_assignment(id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Revoke an assignment"""
+    assignment = db.query(Assignment).filter(Assignment.id == id).first()
+    if not assignment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
+    
+    # Check authorization: user must have can_manage_members on this scope
+    allowed, _, _ = authorize(db, current_user.id, "can_manage_members", assignment.scope_type, assignment.scope_id)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Forbidden: Lacks 'can_manage_members' on this scope"
+        )
+    
+    # Log the deletion
+    audit_meta = {
+        "user_id": assignment.user_id,
+        "role_id": assignment.role_id,
+        "scope_type": assignment.scope_type,
+        "scope_id": assignment.scope_id
+    }
+    
+    audit_entry = AuditLog(
+        action="role_revoke",
+        actor_id=current_user.id,
+        target_type="assignment",
+        target_id=assignment.id,
+        metadata_json=json.dumps(audit_meta)
+    )
+    
+    db.add(audit_entry)
+    db.delete(assignment)
+    db.commit()
