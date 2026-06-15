@@ -5,7 +5,7 @@ from app.core.config import settings
 from app.core.database import Base, engine, SessionLocal
 from app.models.database_models import Role, RolePermission, User, Assignment
 from app.core.security import get_password_hash
-from app.api import auth, roles, folders, assignments, documents, users
+from app.api import auth, roles, folders, assignments, documents, users, versions, notifications, ai, export
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
@@ -16,6 +16,10 @@ app.include_router(folders.router, prefix=f"{settings.API_STR}/folders", tags=["
 app.include_router(assignments.router, prefix=f"{settings.API_STR}/assignments", tags=["Assignments"])
 app.include_router(documents.router, prefix=f"{settings.API_STR}/documents", tags=["Documents"])
 app.include_router(users.router, prefix=f"{settings.API_STR}/users", tags=["Users"])
+app.include_router(versions.router, prefix=f"{settings.API_STR}/versions", tags=["Versioning & Approval"])
+app.include_router(notifications.router, prefix=f"{settings.API_STR}/notifications", tags=["Notifications"])
+app.include_router(ai.router, prefix=f"{settings.API_STR}/ai", tags=["AI Suggestions"])
+app.include_router(export.router, prefix=f"{settings.API_STR}/export", tags=["Export"])
 
 @app.on_event("startup")
 async def startup_event():
