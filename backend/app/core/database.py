@@ -62,6 +62,8 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False,
 )
 
+SessionLocal = AsyncSessionLocal
+
 
 # ---------------------------------------------------------------------------
 # Base class for all models

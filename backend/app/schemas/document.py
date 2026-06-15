@@ -1,8 +1,13 @@
 from pydantic import BaseModel
+from typing import Optional
 
 class DocumentCreate(BaseModel):
     folder_id: str
     title: str
+
+class DocumentUpdate(BaseModel):
+    title: Optional[str] = None
+    folder_id: Optional[str] = None
 
 class DocumentResponse(BaseModel):
     id: str
@@ -11,6 +16,9 @@ class DocumentResponse(BaseModel):
     status: str
     current_version_no: int
     yjs_doc_key: str
+    created_by: str
+    created_at: str
+    updated_at: str
 
     class Config:
         from_attributes = True
@@ -20,6 +28,7 @@ class DocumentListItem(BaseModel):
     title: str
     status: str
     current_version_no: int
+    created_by: str
 
     class Config:
         from_attributes = True

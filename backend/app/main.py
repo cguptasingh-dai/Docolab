@@ -1,9 +1,11 @@
+# app/main.py
 from fastapi import FastAPI
+from sqlalchemy import select  # <-- Added for async queries
 from app.core.config import settings
 from app.core.database import Base, engine, SessionLocal
 from app.models.database_models import Role, RolePermission, User, Assignment
 from app.core.security import get_password_hash
-from app.api import auth, roles, folders, assignments, documents
+from app.api import auth, roles, folders, assignments, documents, users
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
@@ -13,61 +15,68 @@ app.include_router(roles.router, prefix=f"{settings.API_STR}/roles", tags=["Role
 app.include_router(folders.router, prefix=f"{settings.API_STR}/folders", tags=["Folders"])
 app.include_router(assignments.router, prefix=f"{settings.API_STR}/assignments", tags=["Assignments"])
 app.include_router(documents.router, prefix=f"{settings.API_STR}/documents", tags=["Documents"])
+app.include_router(users.router, prefix=f"{settings.API_STR}/users", tags=["Users"])
 
 @app.on_event("startup")
-def startup_event():
-    Base.metadata.create_all(bind=engine)
+async def startup_event():
+    # 1. Create tables asynchronously
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     
-    db = SessionLocal()
-    try:
-        # Seed Roles
-        if db.query(Role).first() is None:
-            owner = Role(id="role-owner", name="owner")
-            editor = Role(id="role-editor", name="editor")
-            viewer = Role(id="role-viewer", name="viewer")
-            db.add_all([owner, editor, viewer])
-            db.commit()
+    # 2. Use an async session context manager (handles closing automatically)
+    async with SessionLocal() as db:
+        try:
+            # Seed Roles (Async query syntax)
+            role_query = await db.execute(select(Role))
+            if role_query.scalars().first() is None:
+                owner = Role(id="role-owner", name="owner")
+                editor = Role(id="role-editor", name="editor")
+                viewer = Role(id="role-viewer", name="viewer")
+                db.add_all([owner, editor, viewer])
+                await db.commit()  # <-- Must be awaited
 
-            # Seed Permissions
-            owner_perms = [
-                "can_edit_direct", "can_suggest", "can_resolve_suggestion",
-                "can_submit_for_approval", "can_give_final_approval",
-                "can_approve_level", "can_manage_approval_policy",
-                "can_view_history", "can_manage_members"
-            ]
-            editor_perms = ["can_edit_direct", "can_suggest", "can_view_history"]
-            
-            for p in owner_perms:
-                db.add(RolePermission(role_id=owner.id, permission=p))
-            for p in editor_perms:
-                db.add(RolePermission(role_id=editor.id, permission=p))
+                # Seed Permissions
+                owner_perms = [
+                    "can_edit_direct", "can_suggest", "can_resolve_suggestion",
+                    "can_submit_for_approval", "can_give_final_approval",
+                    "can_approve_level", "can_manage_approval_policy",
+                    "can_view_history", "can_manage_members"
+                ]
+                editor_perms = ["can_edit_direct", "can_suggest", "can_view_history"]
                 
-            db.commit()
-            
-        # Seed Admin User
-        if db.query(User).filter(User.email == "admin@acme.com").first() is None:
-            admin_user = User(
-                id="user-admin-id",
-                org_id="org-acme-id",
-                email="admin@acme.com",
-                password_hash=get_password_hash("adminsecret"),
-                display_name="Admin User",
-                status="active"
-            )
-            db.add(admin_user)
-            db.commit()
+                for p in owner_perms:
+                    db.add(RolePermission(role_id=owner.id, permission=p))
+                for p in editor_perms:
+                    db.add(RolePermission(role_id=editor.id, permission=p))
+                    
+                await db.commit()  # <-- Must be awaited
+                
+            # Seed Admin User
+            admin_query = await db.execute(select(User).where(User.email == "admin@acme.com"))
+            if admin_query.scalars().first() is None:
+                admin_user = User(
+                    id="user-admin-id",
+                    org_id="org-acme-id",
+                    email="admin@acme.com",
+                    password_hash=get_password_hash("adminsecret"),
+                    display_name="Admin User",
+                    status="active"
+                )
+                db.add(admin_user)
+                await db.commit()  # <-- Must be awaited
 
-            # Seed bootstrap role assignment
-            root_assignment = Assignment(
-                id="assignment-admin-root",
-                org_id="org-acme-id",
-                user_id=admin_user.id,
-                role_id="role-owner",
-                scope_type="folder",
-                scope_id="root-folder-id"
-            )
-            db.add(root_assignment)
-            db.commit()
+                # Seed bootstrap role assignment
+                root_assignment = Assignment(
+                    id="assignment-admin-root",
+                    org_id="org-acme-id",
+                    user_id=admin_user.id,
+                    role_id="role-owner",
+                    scope_type="folder",
+                    scope_id="root-folder-id"
+                )
+                db.add(root_assignment)
+                await db.commit()  # <-- Must be awaited
 
-    finally:
-        db.close()
+        except Exception as e:
+            await db.rollback()  # <-- Rollback must be awaited on error
+            raise e
