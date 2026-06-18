@@ -92,7 +92,7 @@ async def update_document(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Update document (rename or move to different folder)"""
+    """Update document (rename, move, star, or trash)"""
     doc = (
         await db.execute(select(Document).where(Document.id == id, Document.org_id == current_user.org_id))
     ).scalars().first()
@@ -118,6 +118,20 @@ async def update_document(
         changed["folder_id"] = str(data.folder_id)
         doc.folder_id = data.folder_id
 
+    if data.starred is not None:
+        changed["starred"] = data.starred
+        doc.starred = data.starred
+
+    if data.trashed is not None:
+        # Guard: cannot trash a document that is pending approval.
+        if data.trashed and doc.status == "pending_approval":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot trash a document pending approval. Reject the submission first.",
+            )
+        changed["trashed"] = data.trashed
+        doc.trashed = data.trashed
+
     record_audit(
         db, org_id=current_user.org_id, actor_id=current_user.id,
         action=AuditAction.DOCUMENT_UPDATE, target_type="document",
@@ -126,6 +140,7 @@ async def update_document(
     await db.commit()
     await db.refresh(doc)
     return doc
+
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
