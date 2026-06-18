@@ -26,6 +26,10 @@ const VersionHistoryDialog = dynamic(
     ),
   { ssr: false },
 );
+const CompareView = dynamic(
+  () => import("@/components/editor/compare-view").then((m) => m.CompareView),
+  { ssr: false },
+);
 
 export function EditorTopBar() {
   const {
@@ -41,6 +45,9 @@ export function EditorTopBar() {
     setVersionsOpen,
   } = useDocument();
 
+  // Snapshot id being compared against the current version (full-screen overlay).
+  const [compareId, setCompareId] = React.useState<string | null>(null);
+
   const STATUS_TONE: Record<string, string> = {
     Draft: "bg-surface-container text-text-secondary",
     Working: "bg-accent-bg text-primary-container",
@@ -50,7 +57,7 @@ export function EditorTopBar() {
 
   return (
     <header className="z-50 flex h-14 w-full shrink-0 items-center justify-between gap-3 border-b border-border-subtle bg-surface px-lg text-primary">
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         <Link
           href="/browser"
           aria-label="Back to documents"
@@ -58,11 +65,11 @@ export function EditorTopBar() {
         >
           <Icon name="description" fill className="text-[26px]" />
         </Link>
-        <div className="hidden md:block">
+        <div className="hidden shrink-0 md:block">
           <DocMenubar />
         </div>
         <div className="mx-1 hidden h-5 w-px shrink-0 bg-border-subtle sm:block" />
-        <div className="flex min-w-0 flex-col">
+        <div className="flex min-w-[180px] flex-1 flex-col">
           <DocTitle />
           <div className="px-1.5">
             <SaveStatus />
@@ -127,6 +134,17 @@ export function EditorTopBar() {
           docId={docId}
           open={versionsOpen}
           onOpenChange={setVersionsOpen}
+          onCompare={(snapshotId) => {
+            setVersionsOpen(false);
+            setCompareId(snapshotId);
+          }}
+        />
+      )}
+      {compareId && (
+        <CompareView
+          docId={docId}
+          snapshotId={compareId}
+          onClose={() => setCompareId(null)}
         />
       )}
     </header>

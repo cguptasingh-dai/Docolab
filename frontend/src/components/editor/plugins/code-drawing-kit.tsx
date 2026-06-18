@@ -4,6 +4,10 @@ import dynamic from 'next/dynamic';
 
 import { CodeDrawingPlugin } from '@platejs/code-drawing/react';
 
+type CodeDrawingNodeComponent = Parameters<
+  typeof CodeDrawingPlugin.withComponent
+>[0];
+
 // The drawing canvas is heavy and only needed when a document actually contains
 // a code-drawing node. Keep the plugin registered (so the node type, parsing
 // and shortcuts work) but defer the canvas UI until it renders.
@@ -16,5 +20,7 @@ const CodeDrawingElement = dynamic(
 );
 
 export const CodeDrawingKit = [
-  CodeDrawingPlugin.withComponent(CodeDrawingElement),
+  CodeDrawingPlugin.withComponent(
+    CodeDrawingElement as unknown as CodeDrawingNodeComponent,
+  ),
 ];

@@ -2,6 +2,9 @@
 
 import * as React from "react";
 import { useEditorRef, usePluginOption } from "platejs/react";
+import { getCommentKey } from "@platejs/comment";
+import { AIChatPlugin } from "@platejs/ai/react";
+import { toast } from "sonner";
 
 import type { TDiscussion, DiscussionUser } from "@/lib/api/comments";
 import { discussionPlugin } from "@/components/editor/plugins/discussion-kit";
@@ -67,12 +70,14 @@ function DiscussionCard({
   currentUserId,
   onReply,
   onToggleResolved,
+  onAiEdit,
 }: {
   discussion: TDiscussion;
   users: Record<string, DiscussionUser>;
   currentUserId: string;
   onReply: (id: string, text: string) => void;
   onToggleResolved: (id: string) => void;
+  onAiEdit: (d: TDiscussion) => void;
 }) {
   const [draft, setDraft] = React.useState("");
 
@@ -84,9 +89,21 @@ function DiscussionCard({
   };
 
   return (
-    <div className="rounded-xl border border-border-subtle bg-surface-bright p-3 shadow-sm">
+    <div
+      className={cn(
+        "rounded-xl border border-border-subtle bg-surface-bright p-3 shadow-sm transition-opacity",
+        discussion.isResolved && "bg-surface-container opacity-60",
+      )}
+    >
+      {discussion.isResolved && (
+        <div className="mb-2 flex items-center gap-1 font-ui-xs text-ui-xs font-semibold uppercase tracking-wide text-text-muted">
+          <Icon name="check_circle" size={13} />
+          Resolved
+        </div>
+      )}
+
       {discussion.documentContent && (
-        <p className="mb-2 border-l-2 border-status-warning/70 bg-status-warning/5 px-2 py-1 font-ui-xs text-ui-xs italic text-text-secondary">
+        <p className="mb-2 line-clamp-2 border-l-2 border-status-warning/70 bg-status-warning/5 px-2 py-1 font-ui-xs text-ui-xs italic text-text-secondary">
           “{discussion.documentContent}”
         </p>
       )}
@@ -115,6 +132,16 @@ function DiscussionCard({
           <Icon name={discussion.isResolved ? "refresh" : "check_circle"} size={15} />
           {discussion.isResolved ? "Reopen" : "Resolve"}
         </button>
+        {!discussion.isResolved && (
+          <button
+            onClick={() => onAiEdit(discussion)}
+            title="Apply this comment as an AI edit to the commented text"
+            className="flex items-center gap-1 rounded-md px-2 py-1 font-ui-xs text-ui-xs font-semibold text-primary-container transition-colors hover:bg-accent-bg"
+          >
+            <Icon name="auto_awesome" size={15} />
+            AI edit
+          </button>
+        )}
       </div>
 
       {!discussion.isResolved && (
@@ -199,6 +226,48 @@ export function CommentsPanel() {
     [discussions, commit],
   );
 
+  // Select the commented range, then run an AI edit driven by the comment text.
+  // The AI menu opens with the instruction pre-filled; the user reviews + accepts.
+  const aiEdit = React.useCallback(
+    (d: TDiscussion) => {
+      const key = getCommentKey(d.id);
+      const entries = [
+        ...editor.api.nodes({
+          at: [],
+          match: (n) => !!(n as Record<string, unknown>)[key],
+        }),
+      ];
+      if (entries.length === 0) {
+        toast.error("Couldn't locate the commented text in the document.");
+        return;
+      }
+      const startPath = entries[0][1];
+      const endPath = entries[entries.length - 1][1];
+      const range = {
+        anchor: editor.api.start(startPath)!,
+        focus: editor.api.end(endPath)!,
+      };
+      editor.tf.focus();
+      editor.tf.select(range);
+
+      const instruction =
+        richText(d.comments[0]?.contentRich as RichNode[]) ||
+        "Improve this text.";
+      const ai = editor.getApi(AIChatPlugin).aiChat;
+      // Open the AI menu first (same as the toolbar AI button) so the streamed
+      // edit surfaces the Accept / Discard controls. Accept finalizes the
+      // suggestion marks (drops green/red) and stamps the AI attribution with
+      // the current user — see stampPendingAiEdits in ai-menu.tsx.
+      ai.show();
+      void ai.submit("", {
+        toolName: "edit",
+        prompt: `Revise the selected text to address this reviewer comment: "${instruction}". Preserve the author's intent and only change what the comment asks for.`,
+      });
+      toast.success("Asking AI to apply the comment…");
+    },
+    [editor],
+  );
+
   const openList = discussions.filter((d) => !d.isResolved);
   const resolvedList = discussions.filter((d) => d.isResolved);
   const list = tab === "open" ? openList : resolvedList;
@@ -254,6 +323,7 @@ export function CommentsPanel() {
               currentUserId={currentUserId}
               onReply={reply}
               onToggleResolved={toggleResolved}
+              onAiEdit={aiEdit}
             />
           ))
         )}

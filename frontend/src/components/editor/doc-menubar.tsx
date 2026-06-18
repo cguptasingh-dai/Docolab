@@ -3,8 +3,10 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { KEYS } from "platejs";
+import { usePluginOption } from "platejs/react";
 
 import { useEditor } from "@/components/editor/editor-kit";
+import { aiAttributionPlugin } from "@/components/editor/plugins/ai-attribution-kit";
 import { useDocActions } from "@/components/editor/use-doc-actions";
 import { useDocument } from "@/lib/store/document-store";
 import {
@@ -33,6 +35,8 @@ export function DocMenubar() {
     setVersionsOpen,
     saveNow,
   } = useDocument();
+
+  const showAiEdits = usePluginOption(aiAttributionPlugin, "show") as boolean;
 
   const focus = () => editor.tf.focus();
 
@@ -133,6 +137,14 @@ export function DocMenubar() {
           </MenubarItem>
           <MenubarItem onSelect={() => setCommentsOpen(!commentsOpen)}>
             {commentsOpen ? "Hide comments" : "Show comments"}
+          </MenubarItem>
+          <MenubarSeparator />
+          <MenubarItem
+            onSelect={() =>
+              editor.setOption(aiAttributionPlugin, "show", !showAiEdits)
+            }
+          >
+            {showAiEdits ? "Hide AI Edits" : "Show AI Edits"}
           </MenubarItem>
         </MenubarContent>
       </MenubarMenu>

@@ -8,7 +8,6 @@ import type { DocumentRecord } from "@/lib/types";
 import { EditorKit } from "@/components/editor/editor-kit";
 import { Editor, EditorContainer } from "@/components/ui/editor";
 import { EditorTopBar } from "@/components/editor/editor-top-bar";
-import { discussionPlugin } from "@/components/editor/plugins/discussion-kit";
 
 // The comments panel is only mounted when the user opens it, so keep it out of
 // the initial editor chunk and load it on demand.
@@ -18,7 +17,7 @@ const CommentsPanel = dynamic(
   { ssr: false },
 );
 import { DocumentProvider, useDocument } from "@/lib/store/document-store";
-import { getDiscussions } from "@/lib/api/comments";
+import { DiscussionSync } from "@/components/editor/discussion-sync";
 
 export function PlateEditor({ docId }: { docId: string }) {
   return (
@@ -40,17 +39,6 @@ function LoadedWorkspace({ doc }: { doc: DocumentRecord }) {
   const editor = usePlateEditor({ plugins: EditorKit, value: doc.content });
   const { docId, onContentChange, readOnly, commentsOpen, saveNow } = useDocument();
 
-  // Hydrate this document's comment threads into the discussion plugin.
-  React.useEffect(() => {
-    let cancelled = false;
-    void getDiscussions(docId).then((d) => {
-      if (!cancelled) editor.setOption(discussionPlugin, "discussions", d);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [docId, editor]);
-
   // ⌘S / Ctrl+S flushes a manual save.
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -65,6 +53,7 @@ function LoadedWorkspace({ doc }: { doc: DocumentRecord }) {
 
   return (
     <Plate editor={editor} onChange={({ value }) => onContentChange(value)}>
+      <DiscussionSync docId={docId} />
       <div className="flex h-screen flex-col overflow-hidden">
         <EditorTopBar />
         <div className="flex min-h-0 flex-1">
