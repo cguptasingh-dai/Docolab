@@ -5,12 +5,14 @@ import { Plate, usePlateEditor } from "platejs/react";
 
 import type { DocumentRecord } from "@/lib/types";
 import { EditorKit } from "@/components/editor/editor-kit";
+import { createYjsPlugin } from "@/components/editor/plugins/yjs-kit";
 import { Editor, EditorContainer } from "@/components/ui/editor";
 import { EditorTopBar } from "@/components/editor/editor-top-bar";
 import { CommentsPanel } from "@/components/editor/comments-panel";
 import { discussionPlugin } from "@/components/editor/plugins/discussion-kit";
 import { DocumentProvider, useDocument } from "@/lib/store/document-store";
 import { getDiscussions } from "@/lib/api/comments";
+import { getToken } from "@/lib/api/client";
 
 export function PlateEditor({ docId }: { docId: string }) {
   return (
@@ -29,8 +31,11 @@ function Workspace() {
 }
 
 function LoadedWorkspace({ doc }: { doc: DocumentRecord }) {
-  const editor = usePlateEditor({ plugins: EditorKit, value: doc.content });
-  const { docId, onContentChange, readOnly, commentsOpen, saveNow } = useDocument();
+  const token = getToken() ?? '';
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const plugins = React.useMemo(() => [...EditorKit, createYjsPlugin(doc.id, token)], [doc.id]);
+  const editor = usePlateEditor({ plugins });
+  const { docId, readOnly, commentsOpen, saveNow } = useDocument();
 
   // Hydrate this document's comment threads into the discussion plugin.
   React.useEffect(() => {
@@ -56,7 +61,7 @@ function LoadedWorkspace({ doc }: { doc: DocumentRecord }) {
   }, [saveNow]);
 
   return (
-    <Plate editor={editor} onChange={({ value }) => onContentChange(value)}>
+    <Plate editor={editor}>
       <div className="flex h-screen flex-col overflow-hidden">
         <EditorTopBar />
         <div className="flex min-h-0 flex-1">
