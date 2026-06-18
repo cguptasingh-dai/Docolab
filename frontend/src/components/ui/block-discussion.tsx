@@ -114,7 +114,15 @@ const BlockCommentContent = ({ children, element }: PlateElementProps) => {
       }
     }
 
-    if (!activeNode) return null;
+    if (!activeNode) {
+      // Fresh comment with no resolved node yet (totalCount === 0, so no
+      // PopoverTrigger): anchor the popover to the block being commented on so
+      // it appears at the selection instead of the top-left corner.
+      if (isCommenting && commentingCurrent) {
+        return editor.api.toDOMNode(element) ?? null;
+      }
+      return null;
+    }
 
     return editor.api.toDOMNode(activeNode[0])!;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -126,6 +134,9 @@ const BlockCommentContent = ({ children, element }: PlateElementProps) => {
     suggestionNodes,
     draftCommentNode,
     commentNodes,
+    isCommenting,
+    commentingCurrent,
+    element,
   ]);
 
   if (!isTopLevelBlock) return <>{children}</>;
