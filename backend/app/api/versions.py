@@ -14,6 +14,7 @@ from app.schemas.version import (
     RestoreRequest, RestoreResponse
 )
 from app.services.auth_service import authorize
+from app.services.audit_service import record_audit, AuditAction
 
 router = APIRouter()
 
@@ -130,6 +131,12 @@ async def submit_for_approval(
         )
         db.add(notification)
 
+    record_audit(
+        db, org_id=current_user.org_id, actor_id=current_user.id,
+        action=AuditAction.SUBMIT, target_type="version",
+        target_id=version.id, document_id=doc.id,
+        meta={"version_no": new_version_no},
+    )
     await db.commit()
     await db.refresh(version)
 
@@ -224,6 +231,12 @@ async def approve_version(
 
     version.kind = "approved"
 
+    record_audit(
+        db, org_id=current_user.org_id, actor_id=current_user.id,
+        action=AuditAction.APPROVE, target_type="version",
+        target_id=version.id, document_id=doc.id,
+        meta={"version_no": version.version_no},
+    )
     await db.commit()
 
     return {"success": True, "message": f"Version {version.version_no} approved"}
@@ -261,6 +274,12 @@ async def reject_version(
             actor_id=current_user.id
         ))
 
+    record_audit(
+        db, org_id=current_user.org_id, actor_id=current_user.id,
+        action=AuditAction.REJECT, target_type="version",
+        target_id=version.id, document_id=doc.id,
+        meta={"version_no": version.version_no},
+    )
     await db.commit()
 
     return {"success": True, "message": f"Version {version.version_no} rejected"}
@@ -285,5 +304,13 @@ async def restore_version(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     await check_permission(db, current_user.id, doc.id, "can_edit_direct")
+
+    record_audit(
+        db, org_id=current_user.org_id, actor_id=current_user.id,
+        action=AuditAction.RESTORE, target_type="version",
+        target_id=version.id, document_id=doc.id,
+        meta={"section_id": str(data.section_id)},
+    )
+    await db.commit()
 
     return {"success": True, "message": f"Section restored in version {version.version_no}"}
