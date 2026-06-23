@@ -14,6 +14,7 @@ import {
   type TDiscussion,
 } from "@/lib/api/comments";
 import * as auth from "@/lib/api/auth";
+import * as assignments from "@/lib/api/assignments";
 
 const avatar = (seed: string) =>
   `https://api.dicebear.com/9.x/glass/svg?seed=${seed}`;
@@ -53,23 +54,34 @@ export function DiscussionSync({ docId }: { docId: string }) {
     resolvedRef.current = new Map();
 
     (async () => {
-      const me = auth.getCurrentUser();
-      if (me) {
-        const meUser: DiscussionUser = {
-          id: me.id,
-          name: me.name,
-          avatarUrl: avatar(me.id),
-        };
-        const users = editor.getOption(discussionPlugin, "users") as Record<
+      // Build the user map so EVERY comment author resolves to a name/avatar:
+      // start from the org roster, then layer the signed-in user on top.
+      const usersMap: Record<string, DiscussionUser> = {
+        ...(editor.getOption(discussionPlugin, "users") as Record<
           string,
           DiscussionUser
-        >;
-        editor.setOption(discussionPlugin, "users", {
-          ...users,
-          [me.id]: meUser,
-        });
+        >),
+      };
+      try {
+        const roster = await assignments.listOrgUsers();
+        for (const u of roster) {
+          usersMap[u.id] = {
+            id: u.id,
+            name: u.display_name,
+            avatarUrl: avatar(u.id),
+          };
+        }
+      } catch {
+        /* backend unreachable — fall back to just the current user below */
+      }
+      if (cancelled) return;
+
+      const me = auth.getCurrentUser();
+      if (me) {
+        usersMap[me.id] = { id: me.id, name: me.name, avatarUrl: avatar(me.id) };
         editor.setOption(discussionPlugin, "currentUserId", me.id);
       }
+      editor.setOption(discussionPlugin, "users", usersMap);
 
       const loaded = await getDiscussions(docId);
       if (cancelled) return;

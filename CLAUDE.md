@@ -213,5 +213,17 @@ persisted over REST).
   saved" when `NEXT_PUBLIC_COLLAB_ENABLED` is off. Deploying Hocuspocus + the
   env var remains an ops step.
 
+**User-name display fixes**
+- Comment author names — `discussion-sync` now hydrates the discussion `users`
+  map from the org roster (`assignments.listOrgUsers()`) before loading threads,
+  then layers the signed-in user on top. Previously only the current user was
+  injected, so other users' comments rendered with a blank name/avatar.
+- `"(you)"` self-markers — `presence-stack.tsx` and `share-dialog.tsx` compared
+  against the old hardcoded `"you"` id (dead since ids are real UUIDs); now
+  compared against `getCurrentUser()?.id`.
+- Confirmed real session name renders in: browser account menu/avatar
+  (`top-nav`), presence stack, share-dialog collaborator list, and comments
+  (own + others').
+
 **Follow-ups**: Yjs-awareness presence, deep Yjs content duplication, backend
 `updated_at` on the document list item, comment-edit/delete write-through.
