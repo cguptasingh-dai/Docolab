@@ -154,3 +154,38 @@ class AiModelPatch(BaseModel):
     display_name: Optional[str] = None
     enabled: Optional[bool] = None
     is_default: Optional[bool] = None
+
+
+# --- AI usage metering (Admin "Model Usage" section) --------------------------
+# Tokens-only for now (no pricing). `unit` tells the frontend how to label the
+# "cost" windows; cost fields are reserved for when per-token pricing is added.
+
+class UsageByModelItem(BaseModel):
+    vendor: str
+    model_key: str
+    display_name: Optional[str] = None     # None if the model left the catalog
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    call_count: int
+    pct: float                             # share of total tokens (0..100) — the pie
+
+
+class UsageByModelResponse(BaseModel):
+    unit: str = "tokens"
+    total_tokens: int
+    models: list[UsageByModelItem]
+
+
+class UsageByDocumentItem(BaseModel):
+    document_id: Optional[uuid.UUID] = None   # None = orphaned (doc deleted)
+    title: Optional[str] = None
+    total_tokens: int
+    input_tokens: int
+    output_tokens: int
+    call_count: int
+
+
+class UsageByDocumentResponse(BaseModel):
+    unit: str = "tokens"
+    documents: list[UsageByDocumentItem]

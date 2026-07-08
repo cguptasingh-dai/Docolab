@@ -17,6 +17,7 @@
 # =============================================================================
 
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -27,7 +28,7 @@ from app.core.database import get_db
 from app.core.security import verify_password, create_access_token
 from app.api.deps import require_org_admin
 from app.models.database_models import (
-    User, Document, Folder, Role, Assignment, DocumentFolder, AiModel,
+    User, Document, Folder, Role, Assignment, DocumentFolder, AiModel, AiUsageEvent,
 )
 from app.schemas.auth import Token
 from app.schemas.admin import (
@@ -38,6 +39,8 @@ from app.schemas.admin import (
     SetAiModelRequest, AiModelResponse,
     AssignDocumentRequest, OkResponse,
     AiModelItem, AiModelListResponse, AiModelCreate, AiModelPatch,
+    UsageByModelItem, UsageByModelResponse,
+    UsageByDocumentItem, UsageByDocumentResponse,
     VALID_ROLE_NAMES,
 )
 from app.services.auth_service import is_org_admin
@@ -626,3 +629,109 @@ async def admin_update_ai_model(
     await db.commit()
     await db.refresh(m)
     return AiModelItem.model_validate(m)
+
+
+# ---------------------------------------------------------------------------
+# AI usage metering — the Admin "Model Usage" section (Phase 4)
+# Tokens-only. `days` optionally restricts to a trailing window.
+# ---------------------------------------------------------------------------
+
+def _since(days: Optional[int]):
+    if not days or days <= 0:
+        return None
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+
+@router.get("/ai/usage/by-model", response_model=UsageByModelResponse)
+async def admin_usage_by_model(
+    days: Optional[int] = Query(None, description="trailing window in days; omit for all-time"),
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_org_admin),
+):
+    """Token totals per model for the org — feeds the usage-% pie and the
+    per-model token list. `pct` is each model's share of total tokens."""
+    since = _since(days)
+    conds = [AiUsageEvent.org_id == admin.org_id]
+    if since is not None:
+        conds.append(AiUsageEvent.created_at >= since)
+
+    rows = (
+        await db.execute(
+            select(
+                AiUsageEvent.vendor,
+                AiUsageEvent.model_key,
+                func.coalesce(func.sum(AiUsageEvent.input_tokens), 0),
+                func.coalesce(func.sum(AiUsageEvent.output_tokens), 0),
+                func.coalesce(func.sum(AiUsageEvent.total_tokens), 0),
+                func.count(AiUsageEvent.id),
+            )
+            .where(*conds)
+            .group_by(AiUsageEvent.vendor, AiUsageEvent.model_key)
+        )
+    ).all()
+
+    # Resolve display names from the current catalog (a model may have been
+    # removed; then display_name is None but usage still counts).
+    names = {
+        m.model_key: m.display_name
+        for m in await ai_model_service.list_models(db, admin.org_id)
+    }
+    grand_total = sum(r[4] for r in rows) or 0
+    items = [
+        UsageByModelItem(
+            vendor=vendor, model_key=model_key, display_name=names.get(model_key),
+            input_tokens=int(inp), output_tokens=int(out), total_tokens=int(tot),
+            call_count=int(cnt),
+            pct=round((int(tot) / grand_total * 100.0), 2) if grand_total else 0.0,
+        )
+        for (vendor, model_key, inp, out, tot, cnt) in rows
+    ]
+    items.sort(key=lambda i: i.total_tokens, reverse=True)
+    return UsageByModelResponse(total_tokens=int(grand_total), models=items)
+
+
+@router.get("/ai/usage/by-document", response_model=UsageByDocumentResponse)
+async def admin_usage_by_document(
+    limit: int = Query(5, ge=1, le=100, description="top-N documents by token usage"),
+    days: Optional[int] = Query(None, description="trailing window in days; omit for all-time"),
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_org_admin),
+):
+    """Top-N documents by token usage (descending) — feeds the comparison bar
+    chart. Orphaned usage (document deleted) is bucketed under a null id."""
+    since = _since(days)
+    conds = [AiUsageEvent.org_id == admin.org_id]
+    if since is not None:
+        conds.append(AiUsageEvent.created_at >= since)
+
+    rows = (
+        await db.execute(
+            select(
+                AiUsageEvent.document_id,
+                func.coalesce(func.sum(AiUsageEvent.input_tokens), 0),
+                func.coalesce(func.sum(AiUsageEvent.output_tokens), 0),
+                func.coalesce(func.sum(AiUsageEvent.total_tokens), 0),
+                func.count(AiUsageEvent.id),
+            )
+            .where(*conds)
+            .group_by(AiUsageEvent.document_id)
+            .order_by(func.coalesce(func.sum(AiUsageEvent.total_tokens), 0).desc())
+            .limit(limit)
+        )
+    ).all()
+
+    doc_ids = [r[0] for r in rows if r[0] is not None]
+    titles = {}
+    if doc_ids:
+        drows = (await db.execute(select(Document.id, Document.title).where(Document.id.in_(doc_ids)))).all()
+        titles = {d_id: title for d_id, title in drows}
+    items = [
+        UsageByDocumentItem(
+            document_id=document_id,
+            title=titles.get(document_id) if document_id else None,
+            input_tokens=int(inp), output_tokens=int(out), total_tokens=int(tot),
+            call_count=int(cnt),
+        )
+        for (document_id, inp, out, tot, cnt) in rows
+    ]
+    return UsageByDocumentResponse(documents=items)

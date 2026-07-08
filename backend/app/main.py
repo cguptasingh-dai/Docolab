@@ -20,6 +20,8 @@ from app.api import ownership
 from app.api import approval_policies
 # Docolab Admin page (org-wide admin surface) + presence heartbeat
 from app.api import admin, presence
+# Service-to-service internal API (ai-gateway usage reporting)
+from app.api import internal
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
@@ -72,6 +74,7 @@ app.include_router(approval_policies.router, prefix=settings.API_STR, tags=["App
 # presence heartbeat (any authenticated user pings /api/presence/heartbeat).
 app.include_router(admin.router, prefix=f"{settings.API_STR}/admin", tags=["Admin"])
 app.include_router(presence.router, prefix=f"{settings.API_STR}/presence", tags=["Presence"])
+app.include_router(internal.router, prefix=f"{settings.API_STR}/internal", tags=["Internal"])
 
 
 # Role -> permission seed set for the single v1 org.

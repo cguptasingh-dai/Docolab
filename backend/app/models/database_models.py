@@ -322,6 +322,47 @@ class AiModel(Base):
     )
 
 
+class AiUsageEvent(Base):
+    """
+    One row per AI model call, reported by the ai-gateway AFTER it sees the
+    vendor's real token counts. This is the metering behind the Admin "Model
+    Usage" section (usage % by model, token totals per model, top documents by
+    usage).
+
+    Trust model: the gateway authenticates to the backend with a service JWT and
+    also forwards the original AI grant, from which the backend derives org /
+    document / user / vendor / model — the gateway cannot fabricate attribution.
+    `request_id` (gateway-generated, one per upstream call) makes the write
+    idempotent so a retry never double-counts.
+
+    Tokens-only for now; per-token pricing (and a derived cost column) is a
+    deliberate later addition — no schema churn needed to add it.
+    """
+    __tablename__ = "ai_usage_events"
+
+    id:            Mapped[uuid.UUID]        = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    org_id:        Mapped[uuid.UUID]        = mapped_column(UUID(as_uuid=True), nullable=False)
+    # SET NULL on delete so usage history survives document/user removal (the
+    # aggregations bucket orphaned rows under "unknown").
+    document_id:   Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"))
+    user_id:       Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    vendor:        Mapped[str]              = mapped_column(Text, nullable=False)
+    model_key:     Mapped[str]              = mapped_column(Text, nullable=False)
+    input_tokens:  Mapped[int]              = mapped_column(Integer, nullable=False, server_default="0")
+    output_tokens: Mapped[int]              = mapped_column(Integer, nullable=False, server_default="0")
+    total_tokens:  Mapped[int]              = mapped_column(Integer, nullable=False, server_default="0")
+    request_id:    Mapped[str]              = mapped_column(Text, nullable=False)
+    created_at:    Mapped[datetime]         = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("request_id", name="uq_ai_usage_request"),
+        Index("idx_ai_usage_org", "org_id"),
+        Index("idx_ai_usage_document", "document_id"),
+        Index("idx_ai_usage_model", "org_id", "model_key"),
+        Index("idx_ai_usage_created", "created_at"),
+    )
+
+
 # =============================================================================
 # GROUP C — Collaboration & review
 # =============================================================================
