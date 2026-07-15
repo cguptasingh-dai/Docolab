@@ -5,8 +5,9 @@ import { toast } from "sonner";
 
 import { Icon } from "@/components/icon";
 import { InitialsAvatar } from "@/components/admin/avatar";
+import { useAdmin } from "@/components/admin/admin-guard";
 import { ApiError } from "@/lib/api/client";
-import { createUser, type AdminUser } from "@/lib/api/admin";
+import { createUser, createAdmin, type AdminUser } from "@/lib/api/admin";
 
 function relativeTime(iso?: string | null): string {
   if (!iso) return "";
@@ -32,7 +33,9 @@ export function UsersPanel({
   onSelectUser: (u: AdminUser) => void;
   onUserCreated: () => void;
 }) {
+  const admin = useAdmin();
   const [addOpen, setAddOpen] = React.useState(false);
+  const [addAdminOpen, setAddAdminOpen] = React.useState(false);
   const q = search.trim().toLowerCase();
   const filtered = q
     ? users.filter((u) => u.display_name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
@@ -49,9 +52,20 @@ export function UsersPanel({
             {onlineCount} online
           </span>
         </h3>
-        <button onClick={() => setAddOpen(true)} className="gl-btn px-3 py-1.5 text-xs font-medium">
-          <Icon name="person_add" className="text-[16px]" /> Add User
-        </button>
+        <div className="flex items-center gap-2">
+          {admin.is_super_admin && (
+            <button
+              onClick={() => setAddAdminOpen(true)}
+              className="gl-btn px-3 py-1.5 text-xs font-medium"
+              title="Create another admin account"
+            >
+              <Icon name="shield_person" className="text-[16px]" /> Add Admin
+            </button>
+          )}
+          <button onClick={() => setAddOpen(true)} className="gl-btn px-3 py-1.5 text-xs font-medium">
+            <Icon name="person_add" className="text-[16px]" /> Add User
+          </button>
+        </div>
       </div>
 
       {addOpen && (
@@ -59,6 +73,16 @@ export function UsersPanel({
           onClose={() => setAddOpen(false)}
           onCreated={() => {
             setAddOpen(false);
+            onUserCreated();
+          }}
+        />
+      )}
+
+      {addAdminOpen && (
+        <AddAdminDialog
+          onClose={() => setAddAdminOpen(false)}
+          onCreated={() => {
+            setAddAdminOpen(false);
             onUserCreated();
           }}
         />
@@ -82,6 +106,11 @@ export function UsersPanel({
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-[var(--gl-on-surface)] group-hover:text-[var(--gl-primary)]">
                   {u.display_name}
+                  {u.is_admin && (
+                    <span className="ml-2 rounded bg-[rgba(125,211,252,0.12)] px-1.5 py-0.5 text-[10px] text-[var(--gl-primary)]">
+                      {u.is_super_admin ? "Primary admin" : "Admin"}
+                    </span>
+                  )}
                   {u.status === "disabled" && (
                     <span className="ml-2 text-[10px] text-[var(--gl-error)]">delisted</span>
                   )}
@@ -188,6 +217,104 @@ function AddUserDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
           </button>
           <button type="submit" disabled={busy} className="gl-btn gl-btn-solid px-5 py-2 text-sm font-semibold">
             {busy ? <Icon name="progress_activity" className="gl-spin text-base" /> : "Create"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// Requirement 4: the primary admin creates another admin account with dashboard
+// access. Same fields as Add User; the backend grants the org-scoped admin role.
+function AddAdminDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [name, setName] = React.useState("");
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!name.trim()) return setError("Enter a display name.");
+    if (!email.includes("@")) return setError("Enter a valid email.");
+    if (password.length < 8) return setError("Password must be at least 8 characters.");
+    setBusy(true);
+    try {
+      const u = await createAdmin({ email, display_name: name, password });
+      toast.success(`Created admin ${u.display_name}`);
+      onCreated();
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.status === 409
+            ? "That email is already registered."
+            : err.status === 403
+              ? "Only the primary admin can create admin accounts."
+              : err.message
+          : "Failed to create admin.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="gl-overlay" onMouseDown={onClose}>
+      <form
+        onSubmit={submit}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="gl-card w-full max-w-[420px] space-y-4 p-6"
+      >
+        <div className="flex items-center gap-2">
+          <Icon name="shield_person" className="text-xl text-[var(--gl-primary)]" />
+          <h3 className="text-lg font-semibold text-[var(--gl-on-surface)]">Add Admin Account</h3>
+        </div>
+
+        <p className="text-xs text-[var(--gl-on-surface-variant)]">
+          This account will have full admin-dashboard access. It cannot create other admins or
+          delist the primary admin.
+        </p>
+
+        {error && (
+          <div className="flex items-center gap-2 rounded-lg border border-[rgba(255,107,107,0.3)] bg-[rgba(255,107,107,0.08)] px-3 py-2 text-xs text-[var(--gl-error)]">
+            <Icon name="error" size={16} />
+            {error}
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Display name"
+            className="gl-input rounded-lg px-3 py-2.5 text-sm"
+          />
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
+            autoComplete="off"
+            className="gl-input rounded-lg px-3 py-2.5 text-sm"
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password (min 8 chars)"
+            autoComplete="new-password"
+            className="gl-input rounded-lg px-3 py-2.5 text-sm"
+          />
+        </div>
+
+        <div className="flex items-center justify-end gap-3 pt-1">
+          <button type="button" onClick={onClose} className="gl-btn gl-btn-ghost px-4 py-2 text-sm">
+            Cancel
+          </button>
+          <button type="submit" disabled={busy} className="gl-btn gl-btn-solid px-5 py-2 text-sm font-semibold">
+            {busy ? <Icon name="progress_activity" className="gl-spin text-base" /> : "Create Admin"}
           </button>
         </div>
       </form>

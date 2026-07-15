@@ -43,6 +43,9 @@ export interface AdminUser {
   online: boolean;
   last_seen_at?: string | null;
   created_at: string;
+  ai_model: string;         // per-user AI model (model_key)
+  is_admin: boolean;        // holds an org-scoped admin role
+  is_super_admin: boolean;  // the primary admin (admin@acme.com)
 }
 
 export interface AdminDoc {
@@ -158,6 +161,38 @@ export function adminMe(): Promise<AdminUser> {
   return apiFetch<AdminUser>("/admin/me");
 }
 
+/** Change the signed-in admin's own password (profile menu). */
+export function changePassword(oldPassword: string, newPassword: string): Promise<OkResponse> {
+  return apiFetch<OkResponse>("/admin/change-password", {
+    method: "POST",
+    body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+  });
+}
+
+// --- admin accounts (requirement 4 — super-admin only) ----------------------
+
+/** List admin accounts (org-scoped admins). Readable by any admin. */
+export async function listAdmins(): Promise<AdminUser[]> {
+  const r = await apiFetch<{ users: AdminUser[] }>("/admin/admins");
+  return r.users;
+}
+
+/** Super-admin only: create another admin account with dashboard access. */
+export function createAdmin(input: {
+  email: string;
+  display_name: string;
+  password: string;
+}): Promise<AdminUser> {
+  return apiFetch<AdminUser>("/admin/admins", {
+    method: "POST",
+    body: JSON.stringify({
+      email: input.email.trim().toLowerCase(),
+      display_name: input.display_name.trim(),
+      password: input.password,
+    }),
+  });
+}
+
 // --- users + presence (requirements 4, 5, 12) -------------------------------
 
 export async function listUsers(): Promise<AdminUser[]> {
@@ -265,10 +300,11 @@ export function setDocFolders(docId: string, folderIds: string[]): Promise<DocFo
   });
 }
 
-// --- per-document AI model + catalog (requirement 11) -----------------------
+// --- per-user AI model + catalog (requirement 1) ----------------------------
 
-export function setDocAiModel(docId: string, aiModel: string): Promise<{ document_id: string; ai_model: string }> {
-  return apiFetch(`/admin/documents/${docId}/ai-model`, {
+/** Assign the AI model this user's editor uses (validated against the catalog). */
+export function setUserAiModel(userId: string, aiModel: string): Promise<AdminUser> {
+  return apiFetch<AdminUser>(`/admin/users/${userId}/ai-model`, {
     method: "PUT",
     body: JSON.stringify({ ai_model: aiModel }),
   });

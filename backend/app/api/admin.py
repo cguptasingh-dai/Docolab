@@ -25,26 +25,28 @@ from sqlalchemy import select, delete, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.core.security import verify_password, create_access_token, get_password_hash
-from app.api.deps import require_org_admin
+from app.api.deps import require_org_admin, require_super_admin
 from app.models.database_models import (
-    User, Document, Folder, Role, Assignment, DocumentFolder, AiModel, AiUsageEvent,
+    User, Document, Folder, Role, RolePermission, Assignment, DocumentFolder,
+    AiModel, AiUsageEvent,
 )
 from app.schemas.auth import Token
 from app.schemas.admin import (
     AdminLoginRequest, AdminUserItem, AdminUserListResponse, MembershipUpdateRequest,
-    AdminUserCreate,
+    AdminUserCreate, ChangePasswordRequest,
     AdminDocItem, AdminDocListResponse,
     DocAccessEntry, DocAccessListResponse, DocAccessUpsertRequest,
     FolderCheckItem, DocFoldersResponse, SetDocFoldersRequest,
-    SetAiModelRequest, AiModelResponse,
+    SetAiModelRequest,
     AssignDocumentRequest, OkResponse,
     AiModelItem, AiModelListResponse, AiModelCreate, AiModelPatch,
     UsageByModelItem, UsageByModelResponse,
     UsageByDocumentItem, UsageByDocumentResponse,
     VALID_ROLE_NAMES,
 )
-from app.services.auth_service import is_org_admin
+from app.services.auth_service import is_org_admin, is_super_admin
 from app.services.presence_service import is_online
 from app.services.audit_service import record_audit, AuditAction
 from app.services.token_service import issue_refresh_token, prune_user_tokens
@@ -88,6 +90,36 @@ async def _get_org_user(db: AsyncSession, user_id: str, org_id) -> User:
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return user
+
+
+async def _org_admin_ids(db: AsyncSession, org_id) -> set:
+    """User ids in the org that hold an ORG-scoped role granting can_manage_members
+    (i.e. admin-panel access). Used to flag admins in the user list without an
+    N+1 authorize() per row."""
+    rows = (
+        await db.execute(
+            select(Assignment.user_id)
+            .join(Role, Role.id == Assignment.role_id)
+            .join(RolePermission, RolePermission.role_id == Role.id)
+            .where(
+                Assignment.scope_type == "org",
+                Assignment.scope_id == org_id,
+                RolePermission.permission == "can_manage_members",
+            )
+        )
+    ).scalars().all()
+    return set(rows)
+
+
+def _user_item(u: User, *, is_admin: bool) -> AdminUserItem:
+    """Build the API view of a user with the admin/super-admin flags resolved."""
+    return AdminUserItem(
+        id=u.id, email=u.email, display_name=u.display_name,
+        avatar_color=u.avatar_color, status=u.status,
+        online=is_online(u.last_seen_at), last_seen_at=u.last_seen_at,
+        created_at=u.created_at, ai_model=u.ai_model,
+        is_admin=is_admin, is_super_admin=is_super_admin(u),
+    )
 
 
 async def _upsert_doc_assignment(db: AsyncSession, admin: User, doc: Document, user_id, role_name: str):
@@ -168,13 +200,9 @@ async def admin_login(data: AdminLoginRequest, db: AsyncSession = Depends(get_db
 
 @router.get("/me", response_model=AdminUserItem)
 async def admin_me(admin: User = Depends(require_org_admin)):
-    """The signed-in admin's own record (confirms admin access for the UI)."""
-    return AdminUserItem(
-        id=admin.id, email=admin.email, display_name=admin.display_name,
-        avatar_color=admin.avatar_color, status=admin.status,
-        online=is_online(admin.last_seen_at), last_seen_at=admin.last_seen_at,
-        created_at=admin.created_at,
-    )
+    """The signed-in admin's own record (confirms admin access for the UI). The
+    is_super_admin flag gates the admin-account management surface in the UI."""
+    return _user_item(admin, is_admin=True)
 
 
 # ---------------------------------------------------------------------------
@@ -191,14 +219,9 @@ async def admin_list_users(
     users = (
         await db.execute(select(User).where(User.org_id == admin.org_id).order_by(User.created_at))
     ).scalars().all()
+    admin_ids = await _org_admin_ids(db, admin.org_id)
     return AdminUserListResponse(users=[
-        AdminUserItem(
-            id=u.id, email=u.email, display_name=u.display_name,
-            avatar_color=u.avatar_color, status=u.status,
-            online=is_online(u.last_seen_at), last_seen_at=u.last_seen_at,
-            created_at=u.created_at,
-        )
-        for u in users
+        _user_item(u, is_admin=(u.id in admin_ids)) for u in users
     ])
 
 
@@ -241,12 +264,113 @@ async def admin_create_user(
     )
     await db.commit()
     await db.refresh(user)
-    return AdminUserItem(
-        id=user.id, email=user.email, display_name=user.display_name,
-        avatar_color=user.avatar_color, status=user.status,
-        online=is_online(user.last_seen_at), last_seen_at=user.last_seen_at,
-        created_at=user.created_at,
+    return _user_item(user, is_admin=False)
+
+
+# ---------------------------------------------------------------------------
+# admin accounts (requirement 4 — super-admin only)
+# ---------------------------------------------------------------------------
+
+@router.get("/admins", response_model=AdminUserListResponse)
+async def admin_list_admins(
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_org_admin),
+):
+    """Every admin account in the org (users holding an org-scoped admin role).
+    Readable by any admin; only the super admin may create/delist them."""
+    admin_ids = await _org_admin_ids(db, admin.org_id)
+    if not admin_ids:
+        return AdminUserListResponse(users=[])
+    users = (
+        await db.execute(
+            select(User)
+            .where(User.org_id == admin.org_id, User.id.in_(admin_ids))
+            .order_by(User.created_at)
+        )
+    ).scalars().all()
+    return AdminUserListResponse(users=[_user_item(u, is_admin=True) for u in users])
+
+
+@router.post("/admins", response_model=AdminUserItem, status_code=status.HTTP_201_CREATED)
+async def admin_create_admin(
+    data: AdminUserCreate,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_super_admin),
+):
+    """Requirement 4: the primary admin creates another admin account. The new
+    user is granted an ORG-scoped `owner` role (the role carrying
+    can_manage_members), which is exactly what unlocks the admin dashboard —
+    then they can manage normal users, but cannot create/delist admins (that
+    stays super-admin only) and cannot delist the primary admin."""
+    email = data.email.strip().lower()
+    if not data.display_name.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Display name is required")
+    if len(data.password) < 8:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be at least 8 characters")
+
+    existing = (
+        await db.execute(select(User).where(func.lower(User.email) == email))
+    ).scalars().first()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+
+    owner_role = await _role_by_name(db, admin.org_id, "owner")
+    if not owner_role:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Owner role not configured for org")
+
+    user = User(
+        org_id=admin.org_id,
+        email=email,
+        password_hash=get_password_hash(data.password),
+        display_name=data.display_name.strip(),
+        avatar_color=(data.avatar_color or "#7aa2f7"),
+        status="active",
     )
+    db.add(user)
+    await db.flush()
+    # Org-scoped admin grant — the explicit signal is_org_admin looks for.
+    db.add(Assignment(
+        org_id=admin.org_id, user_id=user.id, role_id=owner_role.id,
+        scope_type="org", scope_id=admin.org_id,
+    ))
+    record_audit(
+        db, org_id=admin.org_id, actor_id=admin.id,
+        action=AuditAction.USER_SIGNUP, target_type="user", target_id=user.id,
+        meta={"admin": True, "created_admin": user.email},
+    )
+    await db.commit()
+    await db.refresh(user)
+    return _user_item(user, is_admin=True)
+
+
+# ---------------------------------------------------------------------------
+# self-service password change (requirement 3)
+# ---------------------------------------------------------------------------
+
+@router.post("/change-password", response_model=OkResponse)
+async def admin_change_password(
+    data: ChangePasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_org_admin),
+):
+    """Change the signed-in admin's own password. Verifies the current password
+    and enforces a minimum length on the new one. The frontend confirms the new
+    password was typed twice before calling."""
+    if not verify_password(data.old_password, admin.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be at least 8 characters")
+    if data.new_password == data.old_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must differ from the current one")
+
+    admin.password_hash = get_password_hash(data.new_password)
+    record_audit(
+        db, org_id=admin.org_id, actor_id=admin.id,
+        action=AuditAction.USER_UPDATE, target_type="user", target_id=admin.id,
+        meta={"admin": True, "password_changed": True},
+    )
+    await db.commit()
+    return OkResponse(message="Password updated")
 
 
 @router.patch("/users/{user_id}/membership", response_model=AdminUserItem)
@@ -262,6 +386,24 @@ async def admin_set_membership(
     target = await _get_org_user(db, user_id, admin.org_id)
     if str(target.id) == str(admin.id) and not data.active:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot delist yourself")
+
+    # Delisting protections for admin accounts (requirement 4):
+    #   - the primary/super admin can NEVER be delisted (by anyone).
+    #   - delisting any other admin account is a super-admin-only power; a created
+    #     admin may manage normal users but not remove fellow admins.
+    if not data.active:
+        target_is_admin = await is_org_admin(db, target)
+        if is_super_admin(target):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="The primary administrator account cannot be delisted",
+            )
+        if target_is_admin and not is_super_admin(admin):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the primary administrator can delist an admin account",
+            )
+
     new_status = "active" if data.active else "disabled"
     before = target.status
     target.status = new_status
@@ -272,12 +414,7 @@ async def admin_set_membership(
     )
     await db.commit()
     await db.refresh(target)
-    return AdminUserItem(
-        id=target.id, email=target.email, display_name=target.display_name,
-        avatar_color=target.avatar_color, status=target.status,
-        online=is_online(target.last_seen_at), last_seen_at=target.last_seen_at,
-        created_at=target.created_at,
-    )
+    return _user_item(target, is_admin=await is_org_admin(db, target))
 
 
 @router.get("/users/{user_id}/documents", response_model=AdminDocListResponse)
@@ -558,39 +695,40 @@ async def admin_set_doc_folders(
 
 
 # ---------------------------------------------------------------------------
-# per-document AI model (requirement 11)
+# per-user AI model (requirement 1 — moved from per-document)
 # ---------------------------------------------------------------------------
 
-@router.put("/documents/{doc_id}/ai-model", response_model=AiModelResponse)
-async def admin_set_ai_model(
-    doc_id: str,
+@router.put("/users/{user_id}/ai-model", response_model=AdminUserItem)
+async def admin_set_user_ai_model(
+    user_id: str,
     data: SetAiModelRequest,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_org_admin),
 ):
-    """Assign which AI model users may use on this document. The model_key must
-    be an ENABLED entry in the org catalog (ai_models) — free-text is rejected so
-    a document can't be pointed at an ungoverned/keyless model."""
+    """Assign which AI model this user's editor uses. The model_key must be an
+    ENABLED entry in the org catalog (ai_models) — free-text is rejected so a
+    user can't be pointed at an ungoverned/keyless model. AI resolution keys off
+    the editing user's model (see app/api/ai.py)."""
     model = (data.ai_model or "").strip()
     if not model:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ai_model must not be empty")
-    doc = await _get_org_doc(db, doc_id, admin.org_id)
+    target = await _get_org_user(db, user_id, admin.org_id)
     catalog = await ai_model_service.get_by_key(db, admin.org_id, model)
     if catalog is None or not catalog.enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"'{model}' is not an enabled model in this org's catalog",
         )
-    before = doc.ai_model
-    doc.ai_model = model
+    before = target.ai_model
+    target.ai_model = model
     record_audit(
         db, org_id=admin.org_id, actor_id=admin.id,
-        action=AuditAction.DOCUMENT_UPDATE, target_type="document", target_id=doc.id,
-        document_id=doc.id, meta={"admin": True, "ai_model": {"before": before, "after": model}},
+        action=AuditAction.USER_UPDATE, target_type="user", target_id=target.id,
+        meta={"admin": True, "ai_model": {"before": before, "after": model}},
     )
     await db.commit()
-    await db.refresh(doc)
-    return AiModelResponse(document_id=doc.id, ai_model=doc.ai_model)
+    await db.refresh(target)
+    return _user_item(target, is_admin=await is_org_admin(db, target))
 
 
 # ---------------------------------------------------------------------------

@@ -51,3 +51,19 @@ async def require_org_admin(
             detail="Administrator privileges required",
         )
     return current_user
+
+
+async def require_super_admin(
+    admin: User = Depends(require_org_admin),
+) -> User:
+    """Guard the super-admin-only surface (create/delist admin accounts). The
+    caller must be an org admin AND the primary admin (settings.SUPER_ADMIN_EMAIL).
+    Created admins get a 403 here."""
+    from app.services.auth_service import is_super_admin
+
+    if not is_super_admin(admin):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the primary administrator can perform this action",
+        )
+    return admin

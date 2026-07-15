@@ -56,6 +56,12 @@ class User(Base):
     display_name:  Mapped[str]       = mapped_column(Text, nullable=False)
     avatar_color:  Mapped[Optional[str]] = mapped_column(Text)
     status:        Mapped[str]       = mapped_column(Text, nullable=False, server_default="active")
+    # AI model this user's editor should use, resolved against the org catalog
+    # (ai_models). Per-USER assignment (admin-managed) — replaces the old
+    # per-document choice. Defaults to the enabled Gemini model. Free-form string
+    # so new catalog keys need no migration; the resolver falls back to the org
+    # default if the value is unknown/disabled.
+    ai_model:      Mapped[str]       = mapped_column(Text, nullable=False, server_default="gemini-2.5-flash")
     # PRESENCE: last time this user pinged the heartbeat endpoint. NULL = never
     # seen. "online" is a derived value (last_seen_at within a short window) —
     # computed in the presence service, not stored, so it can't go stale.
