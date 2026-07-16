@@ -9,13 +9,17 @@ import { ApiError } from "@/lib/api/client";
 import {
   userDocuments,
   assignDocumentToUser,
+  upsertDocAccess,
   removeDocAccess,
   setMembership,
+  setUserAiModel,
+  listAiModels,
   ROLE_OPTIONS,
   ROLE_LABELS,
   DEFAULT_ROLE,
   type AdminUser,
   type AdminDoc,
+  type AiModelItem,
   type BackendRole,
 } from "@/lib/api/admin";
 
@@ -38,6 +42,9 @@ export function UserModal({
   const [addQuery, setAddQuery] = React.useState("");
   const [addRole, setAddRole] = React.useState<BackendRole>(DEFAULT_ROLE);
   const [busy, setBusy] = React.useState(false);
+  const [models, setModels] = React.useState<AiModelItem[]>([]);
+  const [model, setModel] = React.useState(user.ai_model);
+  const [modelSaving, setModelSaving] = React.useState(false);
 
   const load = React.useCallback(async () => {
     setDocs(await userDocuments(user.id));
@@ -45,7 +52,31 @@ export function UserModal({
 
   React.useEffect(() => {
     load().catch((e) => toast.error(e instanceof ApiError ? e.message : "Failed to load"));
+    listAiModels()
+      .then(setModels)
+      .catch(() => {
+        /* catalog is optional chrome; the current value still renders */
+      });
   }, [load]);
+
+  // Requirement 1: assign this user's AI model. Save immediately on change,
+  // rolling back the dropdown if the backend rejects it.
+  const changeModel = async (next: string) => {
+    const prev = model;
+    setModel(next);
+    setModelSaving(true);
+    try {
+      const updated = await setUserAiModel(user.id, next);
+      setModel(updated.ai_model);
+      onChanged();
+      toast.success("AI model updated");
+    } catch (e) {
+      setModel(prev);
+      toast.error(e instanceof ApiError ? e.message : "Failed to set AI model");
+    } finally {
+      setModelSaving(false);
+    }
+  };
 
   const assignedIds = new Set((docs ?? []).map((d) => d.id));
   const addable = allDocs.filter(
@@ -80,6 +111,20 @@ export function UserModal({
             ? e.message
             : "Failed to remove",
       );
+    }
+  };
+
+  // Change this user's role on one document. Optimistic — roll back on failure.
+  const changeRole = async (d: AdminDoc, role: BackendRole) => {
+    const prev = d.role_name ?? null;
+    setDocs((cur) => cur?.map((x) => (x.id === d.id ? { ...x, role_name: role } : x)) ?? cur);
+    try {
+      await upsertDocAccess(d.id, user.id, role);
+      onChanged();
+      toast.success(`${user.display_name} is now ${ROLE_LABELS[role]} on "${d.title}"`);
+    } catch (e) {
+      setDocs((cur) => cur?.map((x) => (x.id === d.id ? { ...x, role_name: prev } : x)) ?? cur);
+      toast.error(e instanceof ApiError ? e.message : "Failed to change role");
     }
   };
 
@@ -187,8 +232,35 @@ export function UserModal({
           </div>
         </div>
 
-        {/* Body: assigned documents */}
+        {/* Body: AI model + assigned documents */}
         <div className="flex-1 overflow-y-auto p-6">
+          {/* Requirement 1: per-user AI model (moved here from the Document modal). */}
+          <div className="mb-6">
+            <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-[var(--gl-on-surface-variant)]">
+              AI Model
+              {modelSaving && <Icon name="progress_activity" className="gl-spin text-sm text-[var(--gl-primary)]" />}
+            </label>
+            <select
+              value={model}
+              disabled={modelSaving}
+              onChange={(e) => changeModel(e.target.value)}
+              className="gl-select rounded-lg px-3 py-2.5 text-sm disabled:opacity-60"
+            >
+              {/* Keep the current value visible even if it left the catalog. */}
+              {!models.some((m) => m.model_key === model) && <option value={model}>{model}</option>}
+              {models
+                .filter((m) => m.enabled)
+                .map((m) => (
+                  <option key={m.id} value={m.model_key}>
+                    {m.display_name} {m.is_default ? "(default)" : ""}
+                  </option>
+                ))}
+            </select>
+            <p className="mt-1 text-[11px] text-[var(--gl-on-surface-variant)]">
+              Used by this user&apos;s editor for AI actions.
+            </p>
+          </div>
+
           <p className="mb-2 text-sm font-medium text-[var(--gl-on-surface-variant)]">Assigned Documents</p>
           {docs === null ? (
             <div className="flex justify-center py-6">
@@ -214,13 +286,36 @@ export function UserModal({
                         {isCreator ? "Created by this user" : "Shared with this user"}
                       </p>
                     </div>
+                    {/* Per-document role. Changeable for any user — including the
+                        creator (writing a document-scoped assignment overrides the
+                        creator-owns fallback). */}
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <span className="text-xs text-[var(--gl-on-surface-variant)]">Role</span>
+                      <select
+                        value={d.role_name ?? (isCreator ? "owner" : "")}
+                        onChange={(ev) => changeRole(d, ev.target.value as BackendRole)}
+                        title={isCreator ? "Creator — change to override creator-owns" : "Change role"}
+                        className="gl-select w-28 rounded-lg px-2 py-1.5 text-xs disabled:opacity-60"
+                      >
+                        {!d.role_name && !isCreator && <option value="">— none —</option>}
+                        {ROLE_OPTIONS.map((r) => (
+                          <option key={r} value={r}>
+                            {ROLE_LABELS[r]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                     <button
                       onClick={() => removeDoc(d)}
                       disabled={isCreator}
-                      title={isCreator ? "Creator — manage in the document panel" : "Remove access"}
-                      className="gl-btn gl-btn-ghost h-8 w-8 rounded-lg p-0 disabled:opacity-30"
+                      title={
+                        isCreator
+                          ? "Creator owns this document — remove by deleting or transferring it"
+                          : "Remove access"
+                      }
+                      className="gl-btn gl-btn-ghost h-8 w-8 shrink-0 rounded-lg p-0 disabled:opacity-30"
                     >
-                      <Icon name="link_off" className="text-[18px]" />
+                      <Icon name="delete" className="text-[18px]" />
                     </button>
                   </div>
                 );

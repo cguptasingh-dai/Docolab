@@ -1,6 +1,7 @@
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.config import settings
 from app.models.database_models import Assignment, Folder, Document, Role, RolePermission
 
 
@@ -115,3 +116,15 @@ async def is_org_admin(db: AsyncSession, user) -> bool:
     """
     has_perm, _, _ = await authorize(db, user.id, "can_manage_members", "org", user.org_id)
     return has_perm
+
+
+def is_super_admin(user) -> bool:
+    """True for the single primary admin (settings.SUPER_ADMIN_EMAIL).
+
+    Identity-based, not permission-based: created admins hold the same org-scoped
+    admin role as the super admin, so they are indistinguishable by permissions.
+    The super admin alone may create/delist admin accounts and can never be
+    delisted; this predicate is the gate for those powers.
+    """
+    email = (getattr(user, "email", "") or "").strip().lower()
+    return email == settings.SUPER_ADMIN_EMAIL.strip().lower()

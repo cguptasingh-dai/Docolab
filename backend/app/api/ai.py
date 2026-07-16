@@ -20,15 +20,16 @@ router = APIRouter()
 
 
 async def _resolve_or_404(db: AsyncSession, current_user: User, id: str):
-    """Shared: load an org document, enforce can_suggest, resolve its governed
-    model. Returns (doc, resolved_model)."""
+    """Shared: load an org document, enforce can_suggest, resolve the governed
+    model for the EDITING USER (per-user assignment — users.ai_model). Returns
+    (doc, resolved_model)."""
     doc = (
         await db.execute(select(Document).where(Document.id == id, Document.org_id == current_user.org_id))
     ).scalars().first()
     if not doc or doc.status == "deleted":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     await require_permission(db, current_user.id, "can_suggest", "document", doc.id)
-    resolved = await ai_model_service.resolve(db, current_user.org_id, doc.ai_model)
+    resolved = await ai_model_service.resolve(db, current_user.org_id, current_user.ai_model)
     if resolved is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -58,7 +59,7 @@ async def issue_ai_grant(
         vendor=resolved.vendor,
         model_key=resolved.model_key,
         display_name=resolved.display_name,
-        is_fallback=(resolved.model_key != doc.ai_model),
+        is_fallback=(resolved.model_key != current_user.ai_model),
         grant=grant,
         gateway_url=settings.AI_GATEWAY_URL,
         expires_in=settings.AI_GRANT_TTL_SECONDS,
@@ -85,7 +86,7 @@ async def resolve_ai_model(
     # Invoking AI is a suggest-level action; gate the resolve on the same right.
     await require_permission(db, current_user.id, "can_suggest", "document", doc.id)
 
-    resolved = await ai_model_service.resolve(db, current_user.org_id, doc.ai_model)
+    resolved = await ai_model_service.resolve(db, current_user.org_id, current_user.ai_model)
     if resolved is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -96,7 +97,7 @@ async def resolve_ai_model(
         vendor=resolved.vendor,
         model_key=resolved.model_key,
         display_name=resolved.display_name,
-        is_fallback=(resolved.model_key != doc.ai_model),
+        is_fallback=(resolved.model_key != current_user.ai_model),
     )
 
 

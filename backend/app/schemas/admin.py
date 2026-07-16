@@ -28,6 +28,12 @@ class AdminUserItem(BaseModel):
     online: bool                     # derived from last_seen_at
     last_seen_at: Optional[datetime] = None
     created_at: datetime
+    # Per-user AI model (model_key resolved against the org catalog).
+    ai_model: str = "gemini-2.5-flash"
+    # True if the user holds an org-scoped admin role (can reach the admin panel).
+    is_admin: bool = False
+    # True only for the primary/super admin (settings.SUPER_ADMIN_EMAIL).
+    is_super_admin: bool = False
 
 
 class AdminUserListResponse(BaseModel):
@@ -42,11 +48,20 @@ class MembershipUpdateRequest(BaseModel):
 class AdminUserCreate(BaseModel):
     # Admin-created org member. Like signup, the new user joins the admin's org
     # with NO org-wide role (per-user isolation) — access to documents comes only
-    # from explicit assignments.
+    # from explicit assignments. Reused for admin-account creation (which DOES
+    # grant an org-scoped admin role — see admin_create_admin).
     email: EmailStr
     display_name: str
     password: str
     avatar_color: Optional[str] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    # Self-service password change for the signed-in admin (profile menu).
+    # The frontend collects the new password twice and confirms they match
+    # before calling; the backend re-verifies the old password.
+    old_password: str
+    new_password: str
 
 
 # --- documents ----------------------------------------------------------------
@@ -63,6 +78,9 @@ class AdminDocItem(BaseModel):
     creator_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    # The target user's role on this doc — only populated by the per-user
+    # documents endpoint (None in the org-wide list, where "role" is per-user).
+    role_name: Optional[str] = None
 
 
 class AdminDocListResponse(BaseModel):

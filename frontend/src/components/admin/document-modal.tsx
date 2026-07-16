@@ -9,11 +9,9 @@ import { ApiError } from "@/lib/api/client";
 import {
   docAccess,
   docFolders,
-  listAiModels,
   upsertDocAccess,
   removeDocAccess,
   setDocFolders,
-  setDocAiModel,
   trashDocument,
   ROLE_OPTIONS,
   ROLE_LABELS,
@@ -23,7 +21,6 @@ import {
   type AdminUser,
   type DocAccessEntry,
   type FolderCheckItem,
-  type AiModelItem,
   type BackendRole,
 } from "@/lib/api/admin";
 
@@ -43,18 +40,15 @@ export function DocumentModal({
   const [access, setAccess] = React.useState<DocAccessEntry[] | null>(null);
   const [folders, setFolders] = React.useState<FolderCheckItem[] | null>(null);
   const [primaryFolder, setPrimaryFolder] = React.useState<string | null>(null);
-  const [models, setModels] = React.useState<AiModelItem[]>([]);
-  const [model, setModel] = React.useState(doc.ai_model);
   const [saving, setSaving] = React.useState(false);
   const [addOpen, setAddOpen] = React.useState(false);
   const [addQuery, setAddQuery] = React.useState("");
 
   const load = React.useCallback(async () => {
-    const [a, f, m] = await Promise.all([docAccess(doc.id), docFolders(doc.id), listAiModels()]);
+    const [a, f] = await Promise.all([docAccess(doc.id), docFolders(doc.id)]);
     setAccess(a);
     setFolders(f.folders);
     setPrimaryFolder(f.primary_folder_id ?? null);
-    setModels(m);
   }, [doc.id]);
 
   React.useEffect(() => {
@@ -112,7 +106,6 @@ export function DocumentModal({
   const save = async () => {
     setSaving(true);
     try {
-      if (model !== doc.ai_model) await setDocAiModel(doc.id, model);
       if (folders) {
         // Send the full desired set of extra placements (primary is implied).
         const extra = folders.filter((f) => f.checked && f.folder_id !== primaryFolder).map((f) => f.folder_id);
@@ -210,28 +203,6 @@ export function DocumentModal({
 
         {/* Body */}
         <div className="flex-1 space-y-6 overflow-y-auto p-6">
-          {/* AI model */}
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-[var(--gl-on-surface-variant)]">
-              AI Model
-            </label>
-            <select
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="gl-select rounded-lg px-3 py-2.5 text-sm"
-            >
-              {/* Keep the current value visible even if it left the catalog. */}
-              {!models.some((m) => m.model_key === model) && <option value={model}>{model}</option>}
-              {models
-                .filter((m) => m.enabled)
-                .map((m) => (
-                  <option key={m.id} value={m.model_key}>
-                    {m.display_name} {m.is_default ? "(default)" : ""}
-                  </option>
-                ))}
-            </select>
-          </div>
-
           {/* Assigned users */}
           <div>
             <p className="mb-2 text-sm font-medium text-[var(--gl-on-surface-variant)]">Assigned Users</p>

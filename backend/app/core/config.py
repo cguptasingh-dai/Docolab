@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # org_id is the multi-tenant hook for the future; v1 just uses one fixed value.
     DEFAULT_ORG_ID: str = os.getenv("DEFAULT_ORG_ID", "00000000-0000-0000-0000-000000000001")
 
+    # The primary/super admin — the one account that may create other admin
+    # accounts and delist them, and that can never itself be delisted. Every
+    # other admin is a "created admin" with the normal admin surface minus those
+    # super-admin-only powers.
+    SUPER_ADMIN_EMAIL: str = os.getenv("SUPER_ADMIN_EMAIL", "admin@acme.com")
+
     # --- AI gateway (Phase 2/3: backend-governed, multi-vendor AI) ------------
     # Base URL of the Node ai-gateway service the editor routes model calls
     # through. Empty = no gateway configured (frontend falls back to its own
